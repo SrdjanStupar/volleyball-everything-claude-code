@@ -30,7 +30,7 @@ export const BALL_RADIUS = 26;         // same as HEAD_RADIUS so ball ≈ head s
 // ─── Serve position ───────────────────────────────────────────────────────────
 // Ball sits at the centre of each half-court at a reachable height.
 // Player moves under it to angle the serve; ball does NOT follow the player.
-export const SERVE_BALL_Y = FLOOR_Y - 170;
+export const SERVE_BALL_Y = FLOOR_Y - 120;
 export const SERVE_BALL_X_P1 = LEFT_WALL + (GAME_WIDTH / 2 - LEFT_WALL) / 2;
 export const SERVE_BALL_X_P2 = GAME_WIDTH / 2 + (GAME_WIDTH - 4 - GAME_WIDTH / 2) / 2;
 
@@ -44,9 +44,9 @@ export const BALL_NET_BOUNCE = 0.86;   // velocity coefficient when ball clips n
 export const BALL_NET_SIDE_BOUNCE = 0.92; // (+10%)
 
 // ─── Hit mechanics ────────────────────────────────────────────────────────────
-export const HIT_UPWARD_BASE = 560;    // minimum upward component of a hit
-export const HIT_SIDE_NOSE = 290;      // extra horizontal power from a nose (front) hit
-export const HIT_PLAYER_MOMENTUM = 0.4; // fraction of player vx transferred to ball
+export const HIT_UPWARD_BASE = 616;    // minimum upward component of a hit (+10%)
+export const HIT_SIDE_NOSE = 319;      // extra horizontal power from a nose (front) hit (+10%)
+export const HIT_PLAYER_MOMENTUM = 0.44; // fraction of player vx transferred to ball (+10%)
 
 // ─── Gameplay ─────────────────────────────────────────────────────────────────
 export const WIN_SCORE = 15;
