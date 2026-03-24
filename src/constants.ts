@@ -25,16 +25,23 @@ export const LEG_WIDTH = 7;
 export const PLAYER_FOOT_OFFSET = HEAD_RADIUS + LEG_HEIGHT;
 
 // ─── Ball ─────────────────────────────────────────────────────────────────────
-export const BALL_RADIUS = 14;
+export const BALL_RADIUS = 26;         // same as HEAD_RADIUS so ball ≈ head size
+
+// ─── Serve position ───────────────────────────────────────────────────────────
+// Ball sits at the centre of each half-court at a reachable height.
+// Player moves under it to angle the serve; ball does NOT follow the player.
+export const SERVE_BALL_Y = FLOOR_Y - 170;
+export const SERVE_BALL_X_P1 = LEFT_WALL + (GAME_WIDTH / 2 - LEFT_WALL) / 2;
+export const SERVE_BALL_X_P2 = GAME_WIDTH / 2 + (GAME_WIDTH - 4 - GAME_WIDTH / 2) / 2;
 
 // ─── Physics (manual integration, SI-ish units: px / s) ──────────────────────
 export const GRAVITY = 1100;           // px/s² applied to players
 export const BALL_GRAVITY = 900;       // px/s² applied to ball
 export const PLAYER_SPEED = 220;       // horizontal px/s
 export const PLAYER_JUMP_VELOCITY = 670; // initial upward speed on jump (applied as -vy)
-export const BALL_WALL_BOUNCE = 0.85;  // velocity coefficient on wall/ceiling bounce
-export const BALL_NET_BOUNCE = 0.65;   // velocity coefficient when ball clips net top
-export const BALL_NET_SIDE_BOUNCE = 0.7;
+export const BALL_WALL_BOUNCE = 0.97;  // velocity coefficient on wall/ceiling bounce (+~14% on old 0.85)
+export const BALL_NET_BOUNCE = 0.78;   // velocity coefficient when ball clips net top (+20%)
+export const BALL_NET_SIDE_BOUNCE = 0.84; // (+20%)
 
 // ─── Hit mechanics ────────────────────────────────────────────────────────────
 export const HIT_UPWARD_BASE = 560;    // minimum upward component of a hit

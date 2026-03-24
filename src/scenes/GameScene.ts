@@ -17,6 +17,9 @@ import {
   HEAD_RADIUS,
   BALL_RADIUS,
   PLAYER_FOOT_OFFSET,
+  SERVE_BALL_Y,
+  SERVE_BALL_X_P1,
+  SERVE_BALL_X_P2,
   BALL_GRAVITY,
   BALL_WALL_BOUNCE,
   BALL_NET_BOUNCE,
@@ -132,17 +135,14 @@ export class GameScene extends Phaser.Scene {
     };
 
     // ── Serve trigger ──────────────────────────────────────────────────────────
+    // Ball stays fixed in the centre of the server's half — the player moves
+    // under it to choose the angle, then jumps to serve.
     if (this.gameState === 'serve') {
       const serverPressed =
         (this.servingPlayer === 1 && p1Input.jump) ||
         (this.servingPlayer === 2 && p2Input.jump);
       if (serverPressed) {
         this.startServe();
-      } else {
-        // Ball follows the server while waiting
-        const server = this.servingPlayer === 1 ? this.player1 : this.player2;
-        this.ball.x = server.x;
-        this.ball.y = server.y - HEAD_RADIUS - BALL_RADIUS - 6;
       }
     }
 
@@ -353,9 +353,8 @@ export class GameScene extends Phaser.Scene {
   }
 
   private placeBallForServe(): void {
-    const server = this.servingPlayer === 1 ? this.player1 : this.player2;
-    this.ball.x = server.x;
-    this.ball.y = server.y - HEAD_RADIUS - BALL_RADIUS - 6;
+    this.ball.x = this.servingPlayer === 1 ? SERVE_BALL_X_P1 : SERVE_BALL_X_P2;
+    this.ball.y = SERVE_BALL_Y;
     this.ball.vx = 0;
     this.ball.vy = 0;
     this.ball.consecutiveTouches = 0;
