@@ -135,14 +135,14 @@ export class GameScene extends Phaser.Scene {
     };
 
     // ── Serve trigger ──────────────────────────────────────────────────────────
-    // Ball stays fixed in the centre of the server's half — the player moves
-    // under it to choose the angle, then jumps to serve.
+    // The server jumps toward the stationary ball; the rally only begins when
+    // the player's head physically contacts the ball (checkServeContact below).
     if (this.gameState === 'serve') {
       const serverPressed =
         (this.servingPlayer === 1 && p1Input.jump) ||
         (this.servingPlayer === 2 && p2Input.jump);
       if (serverPressed) {
-        this.startServe();
+        this.serveHintText.setText('');
       }
     }
 
@@ -164,13 +164,18 @@ export class GameScene extends Phaser.Scene {
       this.player2.update(dt, p2Input.left, p2Input.right, p2Input.jump);
     }
 
-    // ── Ball physics + collisions (only during active rally) ──────────────────
+    // ── Ball physics + collisions ─────────────────────────────────────────────
     if (this.gameState === 'rally') {
       this.ball.vy += BALL_GRAVITY * dt;
       this.ball.x += this.ball.vx * dt;
       this.ball.y += this.ball.vy * dt;
       this.ball.updateSpin(dt);
       this.resolveCollisions();
+    }
+
+    // During serve the ball is stationary; start the rally only on actual contact.
+    if (this.gameState === 'serve') {
+      this.checkServeContact();
     }
 
     this.drawFrame();
@@ -342,12 +347,28 @@ export class GameScene extends Phaser.Scene {
   // Serve helpers
   // ─────────────────────────────────────────────────────────────────────────────
 
-  private startServe(): void {
-    const dir = this.servingPlayer === 1 ? 1 : -1;
-    this.ball.vx = dir * 50;
-    this.ball.vy = -380; // gentle toss upward
-    this.ball.consecutiveTouches = 0;
-    this.ball.lastTouchedBy = null;
+  /** Ball stays still until the server's head physically reaches it. */
+  private checkServeContact(): void {
+    const server = this.servingPlayer === 1 ? this.player1 : this.player2;
+    const b = this.ball;
+    const dx = b.x - server.x;
+    const dy = b.y - server.y;
+    const minDist = BALL_RADIUS + HEAD_RADIUS;
+
+    if (dx * dx + dy * dy >= minDist * minDist) return;
+
+    // Separate ball from head
+    const dist = Math.sqrt(dx * dx + dy * dy) || 1;
+    b.x = server.x + (dx / dist) * (minDist + 1);
+    b.y = server.y + (dy / dist) * (minDist + 1);
+
+    // Hit velocity from the player's position and facing direction
+    const hitV = server.getHitVelocity(dx, dy);
+    b.vx = hitV.vx;
+    b.vy = hitV.vy;
+    b.consecutiveTouches = 1;
+    b.lastTouchedBy = this.servingPlayer;
+
     this.gameState = 'rally';
     this.serveHintText.setText('');
   }
