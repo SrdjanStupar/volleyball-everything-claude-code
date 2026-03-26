@@ -1,6 +1,6 @@
 # Arcade Volleyball
 
-A browser-based remake of the classic 1980s Arcade Volleyball game, built with Phaser 3 and TypeScript.
+A proof of concept built with the **Cursor + Claude + everything-claude-code skills framework**. The game itself is a browser-based remake of the classic 1980s Arcade Volleyball, built with Phaser 3 and TypeScript.
 
 ## Stack
 
