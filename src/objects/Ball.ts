@@ -10,6 +10,9 @@ export class Ball {
   consecutiveTouches = 0;
   lastTouchedBy: 1 | 2 | null = null;
 
+  /** Per-player cooldown (ms) — prevents re-contact for the same player right after a hit. */
+  readonly hitCooldown: [number, number] = [0, 0]; // index 0 = player 1, index 1 = player 2
+
   private spinAngle = 0;
 
   // ─────────────────────────────────────────────────────────────────────────────

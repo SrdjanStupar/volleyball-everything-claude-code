@@ -39,6 +39,10 @@ Open [http://localhost:3000](http://localhost:3000) in your browser.
 
 All physics are hand-rolled (no Arcade Physics engine) for full control and easy tuning. Key values live in `src/constants.ts`.
 
+**Hit direction** is determined by where the ball contacts the player's head relative to the head centre (contact normal). Ball above the head → goes up. Ball to the side → goes sideways over the net. Player jumps over the ball → smashes it downward. Player movement velocity adds a momentum bonus on top. The nose is purely cosmetic.
+
+**Multi-contact prevention** — after any hit, that player has a 250 ms cooldown before they can contact the ball again, preventing phantom double-hits from the player's own jump velocity.
+
 ## Project structure
 
 ```

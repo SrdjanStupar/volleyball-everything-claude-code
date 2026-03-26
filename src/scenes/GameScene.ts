@@ -110,7 +110,7 @@ export class GameScene extends Phaser.Scene {
     };
 
     this.score = { p1: 0, p2: 0 };
-    this.servingPlayer = 1;
+    this.servingPlayer = Math.random() < 0.5 ? 1 : 2;
     this.gameState = 'serve';
     this.respawnPlayers();
     this.placeBallForServe();
@@ -170,6 +170,11 @@ export class GameScene extends Phaser.Scene {
       this.ball.x += this.ball.vx * dt;
       this.ball.y += this.ball.vy * dt;
       this.ball.updateSpin(dt);
+
+      // Drain per-player hit cooldowns
+      this.ball.hitCooldown[0] = Math.max(0, this.ball.hitCooldown[0] - delta);
+      this.ball.hitCooldown[1] = Math.max(0, this.ball.hitCooldown[1] - delta);
+
       this.resolveCollisions();
     }
 
@@ -254,7 +259,18 @@ export class GameScene extends Phaser.Scene {
 
     if (distSq >= minDist * minDist || distSq < 1) return;
 
+    // Per-player cooldown: ignore re-contact for 250ms after a hit
+    if (b.hitCooldown[playerNum - 1] > 0) return;
+
     const dist = Math.sqrt(distSq);
+    const nx = dx / dist;
+    const ny = dy / dist;
+
+    // Only register a hit if ball and player are actually closing in on each other
+    const relVx = b.vx - player.vx;
+    const relVy = b.vy - player.vy;
+    const closingSpeed = -(relVx * nx + relVy * ny);
+    if (closingSpeed <= 0) return;
 
     // Track consecutive touches
     if (b.lastTouchedBy === playerNum) {
@@ -272,15 +288,14 @@ export class GameScene extends Phaser.Scene {
     }
 
     // Separate ball from player head
-    const nx = dx / dist;
-    const ny = dy / dist;
     b.x = player.x + nx * (minDist + 1);
     b.y = player.y + ny * (minDist + 1);
 
-    // Apply hit velocity
+    // Apply hit velocity and start cooldown for this player
     const hitV = player.getHitVelocity(dx, dy);
     b.vx = hitV.vx;
     b.vy = hitV.vy;
+    b.hitCooldown[playerNum - 1] = 250; // ms
   }
 
   // ─────────────────────────────────────────────────────────────────────────────
@@ -357,10 +372,18 @@ export class GameScene extends Phaser.Scene {
 
     if (dx * dx + dy * dy >= minDist * minDist) return;
 
-    // Separate ball from head
     const dist = Math.sqrt(dx * dx + dy * dy) || 1;
-    b.x = server.x + (dx / dist) * (minDist + 1);
-    b.y = server.y + (dy / dist) * (minDist + 1);
+    const nx = dx / dist;
+    const ny = dy / dist;
+
+    // Ball is stationary — server must be moving toward it to register contact.
+    // closingSpeed = player velocity projected onto the contact normal.
+    const closingSpeed = server.vx * nx + server.vy * ny;
+    if (closingSpeed <= 0) return;
+
+    // Separate ball from head
+    b.x = server.x + nx * (minDist + 1);
+    b.y = server.y + ny * (minDist + 1);
 
     // Hit velocity from the player's position and facing direction
     const hitV = server.getHitVelocity(dx, dy);
@@ -368,6 +391,7 @@ export class GameScene extends Phaser.Scene {
     b.vy = hitV.vy;
     b.consecutiveTouches = 1;
     b.lastTouchedBy = this.servingPlayer;
+    b.hitCooldown[this.servingPlayer - 1] = 250; // ms
 
     this.gameState = 'rally';
     this.serveHintText.setText('');
@@ -380,6 +404,8 @@ export class GameScene extends Phaser.Scene {
     this.ball.vy = 0;
     this.ball.consecutiveTouches = 0;
     this.ball.lastTouchedBy = null;
+    this.ball.hitCooldown[0] = 0;
+    this.ball.hitCooldown[1] = 0;
   }
 
   private respawnPlayers(): void {

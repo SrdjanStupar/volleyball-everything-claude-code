@@ -6,14 +6,14 @@ import {
   LEG_WIDTH,
   PLAYER_FOOT_OFFSET,
   PLAYER_SPEED,
+  PLAYER_GROUND_SPEED,
   PLAYER_JUMP_VELOCITY,
   GRAVITY,
   FLOOR_Y,
   LEFT_WALL,
   RIGHT_WALL,
   NET_X,
-  HIT_UPWARD_BASE,
-  HIT_SIDE_NOSE,
+  HIT_BASE_SPEED,
   HIT_PLAYER_MOMENTUM,
   C_LEGS,
   C_EYE_PUPIL,
@@ -55,12 +55,13 @@ export class Player {
   // ─────────────────────────────────────────────────────────────────────────────
 
   update(dt: number, moveLeft: boolean, moveRight: boolean, jumpPressed: boolean): void {
-    // Horizontal input
+    // Horizontal input — faster on the ground than in the air
+    const speed = this.isGrounded ? PLAYER_GROUND_SPEED : PLAYER_SPEED;
     if (moveLeft && !moveRight) {
-      this.vx = -PLAYER_SPEED;
+      this.vx = -speed;
       this.facing = 'left';
     } else if (moveRight && !moveLeft) {
-      this.vx = PLAYER_SPEED;
+      this.vx = speed;
       this.facing = 'right';
     } else {
       this.vx = 0;
@@ -123,29 +124,17 @@ export class Player {
    * Returns the velocity the ball should receive.
    */
   getHitVelocity(dx: number, dy: number): { vx: number; vy: number } {
-    const dir = this.facing === 'right' ? 1 : -1;
     const len = Math.sqrt(dx * dx + dy * dy) || 1;
-    const nx = dx / len; // normal pointing toward ball
+    const nx = dx / len; // contact normal: player centre → ball centre
+    const ny = dy / len;
 
-    // How aligned is the contact with the nose direction?
-    const noseAlignment = nx * dir; // –1…+1
-
-    let vx = this.vx * HIT_PLAYER_MOMENTUM;
-    let vy = -HIT_UPWARD_BASE;
-
-    if (noseAlignment > 0.2) {
-      // Front (nose) contact — spike: extra horizontal, slightly less upward
-      vx += dir * HIT_SIDE_NOSE * noseAlignment;
-      if (this.vx * dir > 0) {
-        // Moving into the ball → harder spike
-        vx += dir * 70;
-        vy += 90; // flatter arc
-      }
-    } else if (dy / len < -0.45) {
-      // Top-of-head contact — lob: more upward, less horizontal
-      vy -= 110;
-      vx *= 0.45;
-    }
+    // Ball travels along the contact normal scaled by base hit power,
+    // plus a bonus from player momentum. This allows all directions:
+    // - ball above player  (ny < 0) → goes upward
+    // - ball below player  (ny > 0) → goes downward (player jumped over it)
+    // - ball to the side   (nx ≠ 0) → goes sideways
+    const vx = nx * HIT_BASE_SPEED + this.vx * HIT_PLAYER_MOMENTUM;
+    const vy = ny * HIT_BASE_SPEED + this.vy * HIT_PLAYER_MOMENTUM;
 
     return { vx, vy };
   }
