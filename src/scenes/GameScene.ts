@@ -2,6 +2,8 @@ import Phaser from 'phaser';
 import { Player } from '../objects/Player';
 import { Ball } from '../objects/Ball';
 import { Scoreboard } from '../ui/Scoreboard';
+import { VolleyballSimulation } from '../../shared/VolleyballSimulation';
+import type { PlayerInput, PlayerSide, GameSnapshot } from '../../shared/types';
 import {
   GAME_WIDTH,
   GAME_HEIGHT,
@@ -14,18 +16,6 @@ import {
   NET_WIDTH,
   NET_HEIGHT,
   NET_TOP_Y,
-  HEAD_RADIUS,
-  BALL_RADIUS,
-  PLAYER_FOOT_OFFSET,
-  SERVE_BALL_Y,
-  SERVE_BALL_X_P1,
-  SERVE_BALL_X_P2,
-  BALL_GRAVITY,
-  BALL_WALL_BOUNCE,
-  BALL_NET_BOUNCE,
-  BALL_NET_SIDE_BOUNCE,
-  WIN_SCORE,
-  MAX_CONSECUTIVE_TOUCHES,
   C_BG,
   C_COURT_BORDER,
   C_NET,
@@ -34,19 +24,20 @@ import {
   C_HEAD,
 } from '../constants';
 
-type GameState = 'serve' | 'rally' | 'point_over' | 'game_over';
+const TICK_MS = 1000 / 60;
+
+function lerp(a: number, b: number, t: number): number {
+  return a + (b - a) * t;
+}
 
 export class GameScene extends Phaser.Scene {
+  private sim!: VolleyballSimulation;
+
   private player1!: Player;
   private player2!: Player;
   private ball!: Ball;
   private scoreboard!: Scoreboard;
   private g!: Phaser.GameObjects.Graphics;
-
-  private score = { p1: 0, p2: 0 };
-  private servingPlayer: 1 | 2 = 1;
-  private gameState: GameState = 'serve';
-  private pointOverTimer = 0;
 
   private serveHintText!: Phaser.GameObjects.Text;
   private pointFlashText!: Phaser.GameObjects.Text;
@@ -59,6 +50,13 @@ export class GameScene extends Phaser.Scene {
     p2Right: Phaser.Input.Keyboard.Key;
     p2Jump: Phaser.Input.Keyboard.Key;
   };
+
+  private accumulator = 0;
+  private pendingJump1 = false;
+  private pendingJump2 = false;
+
+  /** State saved just before the last simulation tick — used for render interpolation. */
+  private prevSnapshot: GameSnapshot | null = null;
 
   constructor() {
     super({ key: 'GameScene' });
@@ -75,7 +73,6 @@ export class GameScene extends Phaser.Scene {
       head: C_HEAD,
       nose: C_NOSE_P2,
     });
-
     this.ball = new Ball();
 
     this.scoreboard = new Scoreboard(this);
@@ -109,245 +106,129 @@ export class GameScene extends Phaser.Scene {
       p2Jump: kb.addKey(Phaser.Input.Keyboard.KeyCodes.UP),
     };
 
-    this.score = { p1: 0, p2: 0 };
-    this.servingPlayer = Math.random() < 0.5 ? 1 : 2;
-    this.gameState = 'serve';
-    this.respawnPlayers();
-    this.placeBallForServe();
-    this.showServeHint();
+    kb.on('keydown-W',  () => { this.pendingJump1 = true; });
+    kb.on('keydown-UP', () => { this.pendingJump2 = true; });
+
+    this.sim = new VolleyballSimulation();
+    this.accumulator = 0;
+    this.prevSnapshot = null;
+
+    this.sim.onPointScored = (_side, label, score, servingPlayer) => {
+      this.scoreboard.updateScore(score.p1, score.p2, servingPlayer);
+      this.flashPointMessage(label, _side);
+    };
+
+    this.sim.onGameOver = (winner, score) => {
+      this.time.delayedCall(1400, () => {
+        this.scene.start('GameOverScene', { winner, score });
+      });
+    };
+
+    this.sim.onServeStarted = (servingPlayer) => {
+      this.showServeHint(servingPlayer);
+      this.pointFlashText.setAlpha(0);
+    };
+
+    const initServing = this.sim.getServingPlayer();
+    this.scoreboard.updateScore(0, 0, initServing);
+    this.showServeHint(initServing);
+
+    this.prevSnapshot = this.sim.getSnapshot();
+    this.applySnapshot(this.prevSnapshot);
   }
 
   update(_time: number, delta: number): void {
-    const dt = delta / 1000;
+    const j1 = this.pendingJump1;
+    const j2 = this.pendingJump2;
+    this.pendingJump1 = false;
+    this.pendingJump2 = false;
 
-    const p1Jump = Phaser.Input.Keyboard.JustDown(this.keys.p1Jump);
-    const p2Jump = Phaser.Input.Keyboard.JustDown(this.keys.p2Jump);
-
-    const p1Input = {
-      left: this.keys.p1Left.isDown,
-      right: this.keys.p1Right.isDown,
-      jump: p1Jump,
-    };
-    const p2Input = {
-      left: this.keys.p2Left.isDown,
-      right: this.keys.p2Right.isDown,
-      jump: p2Jump,
-    };
-
-    // ── Serve trigger ──────────────────────────────────────────────────────────
-    // The server jumps toward the stationary ball; the rally only begins when
-    // the player's head physically contacts the ball (checkServeContact below).
-    if (this.gameState === 'serve') {
-      const serverPressed =
-        (this.servingPlayer === 1 && p1Input.jump) ||
-        (this.servingPlayer === 2 && p2Input.jump);
-      if (serverPressed) {
-        this.serveHintText.setText('');
-      }
+    if (this.sim.getMatchState() === 'serve') {
+      if (j1 && this.sim.getServingPlayer() === 1) this.serveHintText.setText('');
+      if (j2 && this.sim.getServingPlayer() === 2) this.serveHintText.setText('');
     }
 
-    // ── Point-over cooldown ────────────────────────────────────────────────────
-    if (this.gameState === 'point_over') {
-      this.pointOverTimer -= delta;
-      if (this.pointOverTimer <= 0) {
-        this.gameState = 'serve';
-        this.respawnPlayers();
-        this.placeBallForServe();
-        this.showServeHint();
-        this.pointFlashText.setAlpha(0);
-      }
+    this.accumulator += delta;
+
+    let usedJump1 = false;
+    let usedJump2 = false;
+
+    while (this.accumulator >= TICK_MS) {
+      // Save state immediately before this tick so we can interpolate toward it
+      this.prevSnapshot = this.sim.getSnapshot();
+
+      const p1Input: PlayerInput = {
+        left: this.keys.p1Left.isDown,
+        right: this.keys.p1Right.isDown,
+        jump: j1 && !usedJump1,
+      };
+      const p2Input: PlayerInput = {
+        left: this.keys.p2Left.isDown,
+        right: this.keys.p2Right.isDown,
+        jump: j2 && !usedJump2,
+      };
+
+      usedJump1 = usedJump1 || p1Input.jump;
+      usedJump2 = usedJump2 || p2Input.jump;
+
+      this.sim.tick(TICK_MS / 1000, [p1Input, p2Input]);
+      this.accumulator -= TICK_MS;
     }
 
-    // ── Player updates (always except game_over) ───────────────────────────────
-    if (this.gameState !== 'game_over') {
-      this.player1.update(dt, p1Input.left, p1Input.right, p1Input.jump);
-      this.player2.update(dt, p2Input.left, p2Input.right, p2Input.jump);
-    }
-
-    // ── Ball physics + collisions ─────────────────────────────────────────────
-    if (this.gameState === 'rally') {
-      this.ball.vy += BALL_GRAVITY * dt;
-      this.ball.x += this.ball.vx * dt;
-      this.ball.y += this.ball.vy * dt;
-      this.ball.updateSpin(dt);
-
-      // Drain per-player hit cooldowns
-      this.ball.hitCooldown[0] = Math.max(0, this.ball.hitCooldown[0] - delta);
-      this.ball.hitCooldown[1] = Math.max(0, this.ball.hitCooldown[1] - delta);
-
-      this.resolveCollisions();
-    }
-
-    // During serve the ball is stationary; start the rally only on actual contact.
-    if (this.gameState === 'serve') {
-      this.checkServeContact();
-    }
-
+    // Only interpolate during an active rally; outside of it entities are
+    // stationary or resetting so we want the exact sim position, not a blend.
+    const inRally = this.sim.getMatchState() === 'rally';
+    const alpha = inRally ? this.accumulator / TICK_MS : 0;
+    this.renderInterpolated(alpha);
     this.drawFrame();
   }
 
   // ─────────────────────────────────────────────────────────────────────────────
-  // Collision resolution
+  // Render interpolation
   // ─────────────────────────────────────────────────────────────────────────────
 
-  private resolveCollisions(): void {
-    const b = this.ball;
-
-    // Left wall
-    if (b.x - BALL_RADIUS <= LEFT_WALL) {
-      b.x = LEFT_WALL + BALL_RADIUS;
-      b.vx = Math.abs(b.vx) * BALL_WALL_BOUNCE;
-    }
-    // Right wall
-    if (b.x + BALL_RADIUS >= RIGHT_WALL) {
-      b.x = RIGHT_WALL - BALL_RADIUS;
-      b.vx = -Math.abs(b.vx) * BALL_WALL_BOUNCE;
-    }
-    // Ceiling
-    if (b.y - BALL_RADIUS <= COURT_TOP_Y) {
-      b.y = COURT_TOP_Y + BALL_RADIUS;
-      b.vy = Math.abs(b.vy) * BALL_WALL_BOUNCE;
-    }
-    // Floor → point scored
-    if (b.y + BALL_RADIUS >= FLOOR_Y) {
-      this.onBallHitFloor();
+  private renderInterpolated(alpha: number): void {
+    const prev = this.prevSnapshot;
+    if (!prev) {
+      this.applySnapshot(this.sim.getSnapshot());
       return;
     }
 
-    this.resolveNetCollision();
-    this.resolvePlayerCollision(this.player1, 1);
-    this.resolvePlayerCollision(this.player2, 2);
+    const p1c = this.sim.player1;
+    const p2c = this.sim.player2;
+    const bc  = this.sim.ball;
+    const p1p = prev.players[0];
+    const p2p = prev.players[1];
+    const bp  = prev.ball;
+
+    this.player1.x         = lerp(p1p.x, p1c.x, alpha);
+    this.player1.y         = lerp(p1p.y, p1c.y, alpha);
+    this.player1.facing    = p1c.facing;
+    this.player1.isGrounded = p1c.isGrounded;
+    this.player1.walkCycle = lerp(p1p.walkCycle, p1c.walkCycle, alpha);
+
+    this.player2.x         = lerp(p2p.x, p2c.x, alpha);
+    this.player2.y         = lerp(p2p.y, p2c.y, alpha);
+    this.player2.facing    = p2c.facing;
+    this.player2.isGrounded = p2c.isGrounded;
+    this.player2.walkCycle = lerp(p2p.walkCycle, p2c.walkCycle, alpha);
+
+    this.ball.x          = lerp(bp.x, bc.x, alpha);
+    this.ball.y          = lerp(bp.y, bc.y, alpha);
+    this.ball.spinAngle  = lerp(bp.spinAngle, bc.spinAngle, alpha);
   }
 
-  private resolveNetCollision(): void {
-    const b = this.ball;
-    const netLeft = NET_X - NET_WIDTH / 2;
-    const netRight = NET_X + NET_WIDTH / 2;
-
-    const overlapX = b.x + BALL_RADIUS > netLeft && b.x - BALL_RADIUS < netRight;
-    const overlapY = b.y + BALL_RADIUS > NET_TOP_Y && b.y - BALL_RADIUS < FLOOR_Y;
-
-    if (!overlapX || !overlapY) return;
-
-    // Estimate which face was hit: compare ball approach to net top vs sides
-    const ballAboveNetTop = b.y - BALL_RADIUS < NET_TOP_Y;
-    const approachingDown = b.vy > 0;
-
-    if (ballAboveNetTop && approachingDown) {
-      // Hit the top of the net
-      b.y = NET_TOP_Y - BALL_RADIUS;
-      b.vy = -Math.abs(b.vy) * BALL_NET_BOUNCE;
-      b.vx *= 0.85;
-    } else {
-      // Hit the side of the net — push back to the side the ball came from
-      if (b.vx > 0) {
-        b.x = netLeft - BALL_RADIUS;
-        b.vx = -Math.abs(b.vx) * BALL_NET_SIDE_BOUNCE;
-      } else {
-        b.x = netRight + BALL_RADIUS;
-        b.vx = Math.abs(b.vx) * BALL_NET_SIDE_BOUNCE;
-      }
-    }
-  }
-
-  private resolvePlayerCollision(player: Player, playerNum: 1 | 2): void {
-    const b = this.ball;
-    const dx = b.x - player.x;
-    const dy = b.y - player.y;
-    const distSq = dx * dx + dy * dy;
-    const minDist = BALL_RADIUS + HEAD_RADIUS;
-
-    if (distSq >= minDist * minDist || distSq < 1) return;
-
-    // Per-player cooldown: ignore re-contact for 250ms after a hit
-    if (b.hitCooldown[playerNum - 1] > 0) return;
-
-    const dist = Math.sqrt(distSq);
-    const nx = dx / dist;
-    const ny = dy / dist;
-
-    // Only register a hit if ball and player are actually closing in on each other
-    const relVx = b.vx - player.vx;
-    const relVy = b.vy - player.vy;
-    const closingSpeed = -(relVx * nx + relVy * ny);
-    if (closingSpeed <= 0) return;
-
-    // Track consecutive touches
-    if (b.lastTouchedBy === playerNum) {
-      b.consecutiveTouches++;
-    } else {
-      b.consecutiveTouches = 1;
-      b.lastTouchedBy = playerNum;
-    }
-
-    // 4th consecutive touch = fault
-    if (b.consecutiveTouches > MAX_CONSECUTIVE_TOUCHES) {
-      const opponent: 1 | 2 = playerNum === 1 ? 2 : 1;
-      this.awardRally(opponent, `P${playerNum} FAULT`);
-      return;
-    }
-
-    // Separate ball from player head
-    b.x = player.x + nx * (minDist + 1);
-    b.y = player.y + ny * (minDist + 1);
-
-    // Apply hit velocity and start cooldown for this player
-    const hitV = player.getHitVelocity(dx, dy);
-    b.vx = hitV.vx;
-    b.vy = hitV.vy;
-    b.hitCooldown[playerNum - 1] = 250; // ms
+  private applySnapshot(s: GameSnapshot): void {
+    this.player1.loadSnapshot(s.players[0]);
+    this.player2.loadSnapshot(s.players[1]);
+    this.ball.loadSnapshot(s.ball);
   }
 
   // ─────────────────────────────────────────────────────────────────────────────
-  // Scoring
+  // UI helpers
   // ─────────────────────────────────────────────────────────────────────────────
 
-  private onBallHitFloor(): void {
-    // The side the ball lands on LOSES the rally
-    const losingSide: 1 | 2 = this.ball.x < NET_X ? 1 : 2;
-    const winningSide: 1 | 2 = losingSide === 1 ? 2 : 1;
-    this.awardRally(winningSide, 'POINT');
-  }
-
-  /**
-   * winningSide won the rally.
-   * Side-out scoring: only the server scores a point.
-   * If receiver wins, they get the serve but no point.
-   */
-  private awardRally(winningSide: 1 | 2, flashLabel: string): void {
-    if (this.gameState !== 'rally') return;
-
-    if (winningSide === this.servingPlayer) {
-      // Server won → +1 point, keep serve
-      if (winningSide === 1) this.score.p1++;
-      else this.score.p2++;
-    } else {
-      // Receiver won → gain serve, no point
-      this.servingPlayer = winningSide;
-    }
-
-    this.scoreboard.updateScore(this.score.p1, this.score.p2, this.servingPlayer);
-    this.flashPointMessage(flashLabel, winningSide);
-
-    // Check win
-    if (this.score.p1 >= WIN_SCORE || this.score.p2 >= WIN_SCORE) {
-      this.gameState = 'game_over';
-      const winner = this.score.p1 >= WIN_SCORE ? 1 : 2;
-      this.time.delayedCall(1400, () => {
-        this.scene.start('GameOverScene', {
-          winner,
-          score: { p1: this.score.p1, p2: this.score.p2 },
-        });
-      });
-      return;
-    }
-
-    this.gameState = 'point_over';
-    this.pointOverTimer = 1600;
-    this.serveHintText.setText('');
-  }
-
-  private flashPointMessage(label: string, side: 1 | 2): void {
+  private flashPointMessage(label: string, side: PlayerSide): void {
     const xPos = side === 1 ? NET_X / 2 : NET_X + (GAME_WIDTH - NET_X) / 2;
     this.pointFlashText.setX(xPos).setText(label).setAlpha(1);
     this.tweens.add({
@@ -358,80 +239,23 @@ export class GameScene extends Phaser.Scene {
     });
   }
 
-  // ─────────────────────────────────────────────────────────────────────────────
-  // Serve helpers
-  // ─────────────────────────────────────────────────────────────────────────────
-
-  /** Ball stays still until the server's head physically reaches it. */
-  private checkServeContact(): void {
-    const server = this.servingPlayer === 1 ? this.player1 : this.player2;
-    const b = this.ball;
-    const dx = b.x - server.x;
-    const dy = b.y - server.y;
-    const minDist = BALL_RADIUS + HEAD_RADIUS;
-
-    if (dx * dx + dy * dy >= minDist * minDist) return;
-
-    const dist = Math.sqrt(dx * dx + dy * dy) || 1;
-    const nx = dx / dist;
-    const ny = dy / dist;
-
-    // Ball is stationary — server must be moving toward it to register contact.
-    // closingSpeed = player velocity projected onto the contact normal.
-    const closingSpeed = server.vx * nx + server.vy * ny;
-    if (closingSpeed <= 0) return;
-
-    // Separate ball from head
-    b.x = server.x + nx * (minDist + 1);
-    b.y = server.y + ny * (minDist + 1);
-
-    // Hit velocity from the player's position and facing direction
-    const hitV = server.getHitVelocity(dx, dy);
-    b.vx = hitV.vx;
-    b.vy = hitV.vy;
-    b.consecutiveTouches = 1;
-    b.lastTouchedBy = this.servingPlayer;
-    b.hitCooldown[this.servingPlayer - 1] = 250; // ms
-
-    this.gameState = 'rally';
-    this.serveHintText.setText('');
-  }
-
-  private placeBallForServe(): void {
-    this.ball.x = this.servingPlayer === 1 ? SERVE_BALL_X_P1 : SERVE_BALL_X_P2;
-    this.ball.y = SERVE_BALL_Y;
-    this.ball.vx = 0;
-    this.ball.vy = 0;
-    this.ball.consecutiveTouches = 0;
-    this.ball.lastTouchedBy = null;
-    this.ball.hitCooldown[0] = 0;
-    this.ball.hitCooldown[1] = 0;
-  }
-
-  private respawnPlayers(): void {
-    this.player1.respawn();
-    this.player2.respawn();
-  }
-
-  private showServeHint(): void {
-    const key = this.servingPlayer === 1 ? 'W' : '↑';
+  private showServeHint(servingPlayer: PlayerSide): void {
+    const key = servingPlayer === 1 ? 'W' : '↑';
     this.serveHintText.setText(
-      `PLAYER ${this.servingPlayer} SERVES  —  press ${key} to serve`
+      `PLAYER ${servingPlayer} SERVES  —  press ${key} to serve`
     );
   }
 
   // ─────────────────────────────────────────────────────────────────────────────
-  // Rendering  (all drawing goes through the single Graphics object)
+  // Rendering
   // ─────────────────────────────────────────────────────────────────────────────
 
   private drawFrame(): void {
     this.g.clear();
 
-    // Background
     this.g.fillStyle(C_BG);
     this.g.fillRect(0, 0, GAME_WIDTH, GAME_HEIGHT);
 
-    // Court border
     this.g.lineStyle(2, C_COURT_BORDER, 1);
     this.g.strokeRect(
       LEFT_WALL,
@@ -440,14 +264,10 @@ export class GameScene extends Phaser.Scene {
       FLOOR_Y - COURT_TOP_Y
     );
 
-    // Net
     this.g.fillStyle(C_NET);
     this.g.fillRect(NET_X - NET_WIDTH / 2, NET_TOP_Y, NET_WIDTH, NET_HEIGHT);
 
-    // Ball
     this.ball.draw(this.g);
-
-    // Players
     this.player1.draw(this.g);
     this.player2.draw(this.g);
   }
